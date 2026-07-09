@@ -12,6 +12,8 @@ class WeatherUpdaterStack(Stack):
 
         # The code that defines your stack goes here
 
+        print("Hello World!")
+
         # example resource
         # queue = sqs.Queue(
         #     self, "WeatherUpdaterQueue",
