@@ -6,6 +6,7 @@ from aws_cdk import (
     BundlingOptions,
     aws_dynamodb as dynamodb,
     aws_iam as iam,
+    RemovalPolicy
 )
 from constructs import Construct
 
@@ -34,17 +35,43 @@ class WeatherUpdaterStack(Stack):
             handler="pull_weather.pull_weather_handler",
             runtime=aws_lambda.Runtime.PYTHON_3_12)
         
+        send_weather_function = aws_lambda.Function(
+            self, 
+            id="SendWeatherFunction", 
+            code=aws_lambda.Code.from_asset("weather_updater/compute", bundling=BundlingOptions(
+                image=aws_lambda.Runtime.PYTHON_3_12.bundling_image,
+                command=[
+                    "bash", "-c",
+                    "pip install -r requirements.txt -t /asset-output && cp -r . /asset-output"
+                ]
+            )), 
+            handler="send_weather.send_weather_handler",
+            runtime=aws_lambda.Runtime.PYTHON_3_12)
+        
         weather_table = dynamodb.TableV2(
             self,
-            id="WeatherTable",
+            id="WeatherTableWeatherUpdaterApp",
             partition_key=dynamodb.Attribute(name="location", type=dynamodb.AttributeType.STRING),
-            table_name="WeatherTable"
+            table_name="WeatherTableWeatherUpdaterApp",
+            removal_policy=RemovalPolicy.DESTROY
         )
 
         pull_weather_function.add_to_role_policy(iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
-                'dynamodb:PutItem',
+                'dynamodb:PutItem'
+            ],
+            resources=[
+                '*',
+            ],
+        ))
+
+        send_weather_function.add_to_role_policy(iam.PolicyStatement(
+            effect=iam.Effect.ALLOW,
+            actions=[
+                'dynamodb:GetItem',
+                'ses:SendEmail',
+                'ses:SendRawEmail'
             ],
             resources=[
                 '*',
