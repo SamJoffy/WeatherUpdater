@@ -2,6 +2,7 @@ import boto3
 from botocore.exceptions import ClientError
 import json
 import ast
+from datetime import datetime
 
 """Get the emails to send the weather to"""
 def get_emails():
@@ -18,6 +19,21 @@ def get_emails():
         all_items.extend(page.get('Items', []))
         
     return all_items
+
+def upload_html_string(html_content, bucket_name, object_name):
+    s3_client = boto3.client('s3')
+    
+    try:
+        # Convert string to bytes and upload
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=object_name,
+            Body=html_content.encode('utf-8'),
+            ContentType='text/html'
+        )
+        print(f"Successfully uploaded HTML string to {bucket_name}/{object_name}")
+    except Exception as e:
+        print(f"Error uploading content: {e}")
 
 def send_weather_handler(event, context):
     # 1. Initialize the client
@@ -48,7 +64,10 @@ def send_weather_handler(event, context):
         SUBJECT = "Today's Weather"
         BODY_HTML = "<h1>Today's Weather Outlook:</h1><h2>" + e["location"]["S"] + ":<br></h2><p><ul>" + weather_list + "</ul></p>"
 
-        # 3. Send the email
+        # 3. Upload to s3 bucket
+        upload_html_string(BODY_HTML, "weather-updater-app-bucket", str(e["location"]["S"]) + "_" + str(datetime.now()) + "_weather.html")
+
+        # 4. Send the email
         try:
             response = ses_client.send_email(
                 Source=SENDER,

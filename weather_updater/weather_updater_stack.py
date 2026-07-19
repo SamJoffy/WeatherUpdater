@@ -7,7 +7,12 @@ from aws_cdk import (
     aws_dynamodb as dynamodb,
     aws_iam as iam,
     RemovalPolicy,
-    Duration
+    Duration,
+    aws_s3 as s3,
+    aws_events as events,
+    aws_events_targets as targets,
+    aws_stepfunctions as sfn,
+    aws_stepfunctions_tasks as tasks
 )
 from constructs import Construct
 
@@ -81,6 +86,46 @@ class WeatherUpdaterStack(Stack):
             removal_policy=RemovalPolicy.DESTROY
         )
 
+        # Create a secure, managed S3 bucket
+        report_bucket = s3.Bucket(
+            self, 
+            "Reports",
+            # Optional: Specify a globally unique bucket name. 
+            # If omitted, AWS CDK generates one automatically.
+            bucket_name="weather-updater-app-bucket", 
+            
+            # Enables tracking and recovering older versions of files
+            versioned=True,
+            
+            # Encrypts data at rest using Amazon S3-managed keys
+            encryption=s3.BucketEncryption.S3_MANAGED,
+            
+            # Blocks all public access for security best practices
+            block_public_access=s3.BlockPublicAccess.BLOCK_ALL,
+            
+            # Forces SSL/HTTPS connections for objects data transfers
+            enforce_ssl=True,
+            
+            # DESTROY deletes the bucket during 'cdk destroy' (use RETAIN for production)
+            removal_policy=RemovalPolicy.DESTROY,
+            
+            # Automatically purges existing objects so the bucket can be cleanly destroyed
+            auto_delete_objects=True 
+        )
+
+        weather_rule = events.Rule(
+            self, 
+            "DailyExecutionRule",
+            schedule=events.Schedule.cron(
+                minute="0",
+                hour="21",
+                day="*",
+                month="*",
+                year="*"
+            ),
+            description="Triggers the Lambda functions daily at 21:00 PM UTC"
+        )
+
         pull_weather_function.add_to_role_policy(iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
@@ -97,7 +142,8 @@ class WeatherUpdaterStack(Stack):
                 'dynamodb:GetItem',
                 'dynamodb:Scan',
                 'ses:SendEmail',
-                'ses:SendRawEmail'
+                'ses:SendRawEmail',
+                's3:PutObject'
             ],
             resources=[
                 '*',
@@ -113,3 +159,32 @@ class WeatherUpdaterStack(Stack):
                 '*',
             ],
         ))
+
+        add_emails_task = tasks.LambdaInvoke(
+            self, "InvokeAddEmails",
+            lambda_function=add_emails_function,
+            payload_response_only=True
+        )
+
+        pull_weather_task = tasks.LambdaInvoke(
+            self, "InvokePullWeather",
+            lambda_function=pull_weather_function,
+            payload_response_only=True
+        )
+
+        send_weather_task = tasks.LambdaInvoke(
+            self, "InvokeSendWeather",
+            lambda_function=send_weather_function,
+            payload_response_only=True
+        )
+
+        # 4. Chain the tasks sequentially into a State Machine definition
+        definition = add_emails_task.next(pull_weather_task).next(send_weather_task)
+
+        state_machine = sfn.StateMachine(
+            self, "SequentialStateMachine",
+            definition_body=sfn.DefinitionBody.from_chainable(definition),
+            timeout=Duration.minutes(5)
+        )
+
+        weather_rule.add_target(targets.SfnStateMachine(state_machine))
