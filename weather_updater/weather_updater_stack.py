@@ -12,7 +12,12 @@ from aws_cdk import (
     aws_events as events,
     aws_events_targets as targets,
     aws_stepfunctions as sfn,
-    aws_stepfunctions_tasks as tasks
+    aws_stepfunctions_tasks as tasks,
+    aws_apigateway as apigateway,
+    aws_cloudwatch as cloudwatch,
+    aws_cloudwatch_actions as cw_actions,
+    aws_sns as sns,
+    aws_sns_subscriptions as subscriptions
 )
 from constructs import Construct
 
@@ -184,7 +189,51 @@ class WeatherUpdaterStack(Stack):
         state_machine = sfn.StateMachine(
             self, "SequentialStateMachine",
             definition_body=sfn.DefinitionBody.from_chainable(definition),
-            timeout=Duration.minutes(5)
+            timeout=Duration.minutes(5),
+            state_machine_type=sfn.StateMachineType.EXPRESS
         )
 
         weather_rule.add_target(targets.SfnStateMachine(state_machine))
+
+        # 5. Create apigateway to trigger workflow manually
+        api = apigateway.StepFunctionsRestApi(self, "WeatherStateMachineRestApi",
+            state_machine=state_machine,
+            deploy_options=apigateway.StageOptions(
+                stage_name="prod"
+            )
+        )
+
+        # 6. Setup cloudwatch alarm for lambda errors
+        pull_weather_error_metric = pull_weather_function.metric_errors()
+        send_weather_error_metric = pull_weather_function.metric_errors()
+        add_emails_error_metric = add_emails_function.metric_errors()
+
+
+        combined_expression = cloudwatch.MathExpression(
+            expression="MAX([m1, m2, m3])",
+            using_metrics={
+                "m1": pull_weather_error_metric,
+                "m2": send_weather_error_metric,
+                "m3": add_emails_error_metric
+            },
+            period=Duration.minutes(5),
+            label="Max Errors Across Microservices"
+        )
+
+        # Triggers if there is 1 or more errors total
+        combined_alarm = combined_expression.create_alarm(
+            self, "GroupedLambdaAlarm",
+            threshold=1,
+            evaluation_periods=1
+        )
+
+        # Create an SNS Topic for notifications
+        alarm_topic = sns.Topic(self, "AlarmNotificationTopic")
+        alarm_topic.add_subscription(
+            subscriptions.EmailSubscription("sjoffy@hotmail.com")
+        )
+
+        # Connect the SNS Topic to the CloudWatch Alarm Action
+        combined_alarm.add_alarm_action(
+            cw_actions.SnsAction(alarm_topic)
+        )
