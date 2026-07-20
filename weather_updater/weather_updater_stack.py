@@ -230,7 +230,7 @@ class WeatherUpdaterStack(Stack):
         # Create an SNS Topic for notifications
         alarm_topic = sns.Topic(self, "AlarmNotificationTopic")
         alarm_topic.add_subscription(
-            subscriptions.EmailSubscription("sjoffy@hotmail.com")
+            subscriptions.EmailSubscription("weatherupdaterapp@gmail.com")
         )
 
         # Connect the SNS Topic to the CloudWatch Alarm Action
