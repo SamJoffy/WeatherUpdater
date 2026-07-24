@@ -13,9 +13,9 @@ def pull_weather_handler(event, context):
     dynamodb = boto3.resource('dynamodb', region_name='us-east-1')
 
     locations = []
-    locations.append(location("Canberra", -35.28, 149.13, "AEST"))
-    locations.append(location("Sydney", -33.8688, 151.2093, "AEST"))
-    locations.append(location("New York", 40.7128, -74.006, "EST"))
+    locations.append(location("Canberra", -35.28, 149.13, "Australia/Sydney"))
+    locations.append(location("Sydney", -33.8688, 151.2093, "Australia/Canberra"))
+    locations.append(location("New York", 40.7128, -74.006, "America/New_York"))
 
     # Reference your table
     table = dynamodb.Table('WeatherTableWeatherUpdaterApp')
