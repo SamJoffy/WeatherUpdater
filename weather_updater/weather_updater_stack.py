@@ -26,18 +26,13 @@ class WeatherUpdaterStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # The code that defines your stack goes here
-
-        # database_write_role = iam.Role(
-        #     self, "DatabaseWriteRole",
-        #     assumed_by=iam.ServicePrincipal("lambda.amazonaws.com")
-        # )
-
+        # 1. Create Lambda Functions
         pull_weather_function = aws_lambda.Function(
             self, 
             id="PullWeatherFunction", 
             code=aws_lambda.Code.from_asset("weather_updater/compute", bundling=BundlingOptions(
                 image=aws_lambda.Runtime.PYTHON_3_12.bundling_image,
+                # Need to install extra libraries with docker
                 command=[
                     "bash", "-c",
                     "pip install -r requirements.txt -t /asset-output && cp -r . /asset-output"
@@ -74,7 +69,8 @@ class WeatherUpdaterStack(Stack):
             handler="add_emails.add_emails_handler",
             runtime=aws_lambda.Runtime.PYTHON_3_12,
             timeout=Duration.seconds(20))
-        
+
+        # 2. Create dynamodb tables
         weather_table = dynamodb.TableV2(
             self,
             id="WeatherTableWeatherUpdaterApp",
@@ -91,7 +87,7 @@ class WeatherUpdaterStack(Stack):
             removal_policy=RemovalPolicy.DESTROY
         )
 
-        # Create a secure, managed S3 bucket
+        # 3. Create s3 bucket to hold reports
         report_bucket = s3.Bucket(
             self, 
             "Reports",
@@ -118,6 +114,7 @@ class WeatherUpdaterStack(Stack):
             auto_delete_objects=True 
         )
 
+        # 4. Create EventBridge Event
         weather_rule = events.Rule(
             self, 
             "DailyExecutionRule",
@@ -131,6 +128,7 @@ class WeatherUpdaterStack(Stack):
             description="Triggers the Lambda functions daily at 21:00 PM UTC"
         )
 
+        # 5. Create roles for lambda functions
         pull_weather_function.add_to_role_policy(iam.PolicyStatement(
             effect=iam.Effect.ALLOW,
             actions=[
@@ -165,6 +163,7 @@ class WeatherUpdaterStack(Stack):
             ],
         ))
 
+        # 6. Create tasks and chain them in a state machine
         add_emails_task = tasks.LambdaInvoke(
             self, "InvokeAddEmails",
             lambda_function=add_emails_function,
@@ -183,7 +182,6 @@ class WeatherUpdaterStack(Stack):
             payload_response_only=True
         )
 
-        # 4. Chain the tasks sequentially into a State Machine definition
         definition = add_emails_task.next(pull_weather_task).next(send_weather_task)
 
         state_machine = sfn.StateMachine(
@@ -193,9 +191,10 @@ class WeatherUpdaterStack(Stack):
             state_machine_type=sfn.StateMachineType.EXPRESS
         )
 
+        # 7. Add state machine to EventBridge Event
         weather_rule.add_target(targets.SfnStateMachine(state_machine))
 
-        # 5. Create apigateway to trigger workflow manually
+        # 8. Create apigateway to trigger workflow manually
         api = apigateway.StepFunctionsRestApi(self, "WeatherStateMachineRestApi",
             state_machine=state_machine,
             deploy_options=apigateway.StageOptions(
@@ -203,7 +202,7 @@ class WeatherUpdaterStack(Stack):
             )
         )
 
-        # 6. Setup cloudwatch alarm for lambda errors
+        # 9. Setup cloudwatch alarm for lambda errors
         pull_weather_error_metric = pull_weather_function.metric_errors()
         send_weather_error_metric = pull_weather_function.metric_errors()
         add_emails_error_metric = add_emails_function.metric_errors()
@@ -227,7 +226,7 @@ class WeatherUpdaterStack(Stack):
             evaluation_periods=1
         )
 
-        # Create an SNS Topic for notifications
+        # 10. Create an SNS Topic for notifications
         alarm_topic = sns.Topic(self, "AlarmNotificationTopic")
         alarm_topic.add_subscription(
             subscriptions.EmailSubscription("weatherupdaterapp@gmail.com")
